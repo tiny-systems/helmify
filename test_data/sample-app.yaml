@@ -135,6 +135,7 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
+  ingressClassName: nginx
   rules:
     - http:
         paths:
@@ -205,7 +206,7 @@ data:
       name: default-oneperhost-pod-template
     spec:
       templates:
-        podTemplates: 
+        podTemplates:
           - name: default-oneperhost-pod-template
             distribution: "OnePerHost"
 ---
