@@ -2,7 +2,6 @@ package helm
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -92,10 +91,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 Create the name of the service account to use
 */}}
 {{- define "<CHARTNAME>.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "<CHARTNAME>.fullname" .) .Values.serviceAccount.name }}
+{{- $default := (include "<CHARTNAME>.fullname" .) }}
+{{- with .Values.serviceAccount }}
+{{- if .create }}
+{{- default $default .name }}
 {{- else }}
-{{- default "default" .Values.serviceAccount.name }}
+{{- default "default" .name }}
+{{- end }}
 {{- end }}
 {{- end }}
 `
@@ -178,7 +180,7 @@ func createCommonFiles(chartDir, chartName string, crd bool, certManagerAsSubcha
 			return
 		}
 		file := filepath.Join(path...)
-		err = ioutil.WriteFile(file, content, 0640)
+		err = os.WriteFile(file, content, 0640)
 		if err == nil {
 			logrus.WithField("file", file).Info("created")
 		}

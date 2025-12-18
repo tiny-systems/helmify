@@ -3,6 +3,7 @@ package deployment
 import (
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 var deploymentGVC = schema.GroupVersionKind{
@@ -32,6 +34,9 @@ spec:
 {{- end }}
 {{- if .RevisionHistoryLimit }}
 {{ .RevisionHistoryLimit }}
+{{- end }}
+{{- if .Strategy }}
+{{ .Strategy }}
 {{- end }}
   selector:
 {{ .Selector }}
@@ -83,6 +88,11 @@ func (d deployment) Process(appMeta helmify.AppMetadata, obj *unstructured.Unstr
 		return true, nil, err
 	}
 
+	strategy, err := processStrategy(name, &depl, &values)
+	if err != nil {
+		return true, nil, err
+	}
+
 	matchLabels, err := yamlformat.Marshal(map[string]interface{}{"matchLabels": depl.Spec.Selector.MatchLabels}, 0)
 	if err != nil {
 		return true, nil, err
@@ -115,7 +125,7 @@ func (d deployment) Process(appMeta helmify.AppMetadata, obj *unstructured.Unstr
 	}
 
 	nameCamel := strcase.ToLowerCamel(name)
-	specMap, podValues, err := pod.ProcessSpec(nameCamel, appMeta, depl.Spec.Template.Spec)
+	specMap, podValues, err := pod.ProcessSpec(nameCamel, appMeta, depl.Spec.Template.Spec, 0)
 	if err != nil {
 		return true, nil, err
 	}
@@ -128,8 +138,11 @@ func (d deployment) Process(appMeta helmify.AppMetadata, obj *unstructured.Unstr
 	if err != nil {
 		return true, nil, err
 	}
+	if appMeta.Config().AddWebhookOption {
+		spec = addWebhookOption(spec)
+	}
 
-	spec = strings.ReplaceAll(spec, "'", "")
+	spec = replaceSingleQuotes(spec)
 
 	return true, &result{
 		values: values,
@@ -137,6 +150,7 @@ func (d deployment) Process(appMeta helmify.AppMetadata, obj *unstructured.Unstr
 			Meta                 string
 			Replicas             string
 			RevisionHistoryLimit string
+			Strategy             string
 			Selector             string
 			PodLabels            string
 			PodAnnotations       string
@@ -145,12 +159,42 @@ func (d deployment) Process(appMeta helmify.AppMetadata, obj *unstructured.Unstr
 			Meta:                 meta,
 			Replicas:             replicas,
 			RevisionHistoryLimit: revisionHistoryLimit,
+			Strategy:             strategy,
 			Selector:             selector,
 			PodLabels:            podLabels,
 			PodAnnotations:       podAnnotations,
 			Spec:                 spec,
 		},
 	}, nil
+}
+
+func replaceSingleQuotes(s string) string {
+	r := regexp.MustCompile(`'({{((.*|.*\n.*))}}.*)'`)
+	return r.ReplaceAllString(s, "${1}")
+}
+
+func addWebhookOption(manifest string) string {
+	webhookOptionHeader := "      {{- if .Values.webhook.enabled }}"
+	webhookOptionFooter := "      {{- end }}"
+	volumes := `      - name: cert
+        secret:
+          defaultMode: 420
+          secretName: webhook-server-cert`
+	volumeMounts := `        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          name: cert
+          readOnly: true`
+	manifest = strings.ReplaceAll(manifest, volumes, fmt.Sprintf("%s\n%s\n%s",
+		webhookOptionHeader, volumes, webhookOptionFooter))
+	manifest = strings.ReplaceAll(manifest, volumeMounts, fmt.Sprintf("%s\n%s\n%s",
+		webhookOptionHeader, volumeMounts, webhookOptionFooter))
+
+	re := regexp.MustCompile(`        - containerPort: \d+
+          name: webhook-server
+          protocol: TCP`)
+
+	manifest = re.ReplaceAllString(manifest, fmt.Sprintf("%s\n%s\n%s", webhookOptionHeader,
+		re.FindString(manifest), webhookOptionFooter))
+	return manifest
 }
 
 func processReplicas(name string, deployment *appsv1.Deployment, values *helmify.Values) (string, error) {
@@ -185,11 +229,68 @@ func processRevisionHistoryLimit(name string, deployment *appsv1.Deployment, val
 	return revisionHistoryLimit, nil
 }
 
+func processStrategy(name string, deployment *appsv1.Deployment, values *helmify.Values) (string, error) {
+	if deployment.Spec.Strategy.Type == "" {
+		return "", nil
+	}
+	allowedStrategyTypes := map[appsv1.DeploymentStrategyType]bool{
+		appsv1.RecreateDeploymentStrategyType:      true,
+		appsv1.RollingUpdateDeploymentStrategyType: true,
+	}
+	if !allowedStrategyTypes[deployment.Spec.Strategy.Type] {
+		return "", fmt.Errorf("invalid deployment strategy type: %s", deployment.Spec.Strategy.Type)
+	}
+	strategyTypeTpl, err := values.Add(string(deployment.Spec.Strategy.Type), name, "strategy", "type")
+	if err != nil {
+		return "", err
+	}
+	strategyMap := map[string]interface{}{
+		"type": strategyTypeTpl,
+	}
+	if deployment.Spec.Strategy.Type == appsv1.RollingUpdateDeploymentStrategyType {
+		if rollingUpdate := deployment.Spec.Strategy.RollingUpdate; rollingUpdate != nil {
+			rollingUpdateMap := map[string]interface{}{}
+			setRollingUpdateField := func(value *intstr.IntOrString, fieldName string) error {
+				var tpl string
+				var err error
+				if value.Type == intstr.Int {
+					tpl, err = values.Add(value.IntValue(), name, "strategy", "rollingUpdate", fieldName)
+				} else {
+					tpl, err = values.Add(value.String(), name, "strategy", "rollingUpdate", fieldName)
+				}
+				if err != nil {
+					return err
+				}
+				rollingUpdateMap[fieldName] = tpl
+				return nil
+			}
+			if rollingUpdate.MaxSurge != nil {
+				if err := setRollingUpdateField(rollingUpdate.MaxSurge, "maxSurge"); err != nil {
+					return "", err
+				}
+			}
+			if rollingUpdate.MaxUnavailable != nil {
+				if err := setRollingUpdateField(rollingUpdate.MaxUnavailable, "maxUnavailable"); err != nil {
+					return "", err
+				}
+			}
+			strategyMap["rollingUpdate"] = rollingUpdateMap
+		}
+	}
+	strategy, err := yamlformat.Marshal(map[string]interface{}{"strategy": strategyMap}, 2)
+	if err != nil {
+		return "", err
+	}
+	strategy = strings.ReplaceAll(strategy, "'", "")
+	return strategy, nil
+}
+
 type result struct {
 	data struct {
 		Meta                 string
 		Replicas             string
 		RevisionHistoryLimit string
+		Strategy             string
 		Selector             string
 		PodLabels            string
 		PodAnnotations       string

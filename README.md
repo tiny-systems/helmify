@@ -107,8 +107,13 @@ Usage:
 | -version                  | Print helmify version.                                                                                                                                                                                      | `helmify -version`                  |
 | -crd-dir                  | Place crds in their own folder per Helm 3 [docs](https://helm.sh/docs/chart_best_practices/custom_resource_definitions/#method-1-let-helm-do-it-for-you). Caveat: CRDs templating is not supported by Helm. | `helmify -crd-dir`                  |
 | -image-pull-secrets       | Allows the user to use existing secrets as imagePullSecrets                                                                                                                                                 | `helmify -image-pull-secrets`       |
+| -original-name            | Use the object's original name instead of adding the chart's release name as the common prefix.                                                                                                             | `helmify -original-name`            |
 | -cert-manager-as-subchart | Allows the user to install cert-manager as a subchart                                                                                                                                                       | `helmify -cert-manager-as-subchart` |
-| -cert-manager-version | Allows the user to specify cert-manager subchart version. Only useful with cert-manager-as-subchart. (default "v1.12.2")                                                                                                                                                       | `helmify -cert-manager-as-subchart` |
+| -cert-manager-version     | Allows the user to specify cert-manager subchart version. Only useful with cert-manager-as-subchart. (default "v1.12.2")                                                                                    | `helmify -cert-manager-version=v1.12.2`    |
+| -cert-manager-install-crd     | Allows the user to install cert-manager CRD as part of the cert-manager subchart.(default "true")                                                                                                           | `helmify -cert-manager-install-crd` |
+| -preserve-ns              | Allows users to use the object's original namespace instead of adding all the resources to a common namespace. (default "false")                                                                            | `helmify -preserve-ns`              |
+| -add-webhook-option | Adds an option to enable/disable webhook installation  | `helmify -add-webhook-option`|
+| -optional-crds | Enable optional CRD installation through values. | `helmify -optional-crds` |
 ## Status
 Supported k8s resources:
 - Deployment, DaemonSet, StatefulSet
@@ -159,3 +164,26 @@ go test ./...
 Beside unit-tests, project contains e2e test `pkg/app/app_e2e_test.go`.
 It's a go test, which uses `test_data/*` to generate a chart in temporary directory. 
 Then runs `helm lint --strict` to check if generated chart is valid.
+
+## Contribute
+
+Following rules will help changes to be accepted faster:
+- For more than one-line bugfixes consider creating an issue with bug description or feature request
+- For feature request try to think about and cover following topics (when applicable):
+  - Motivation: why feature is needed? Which problem does it solve? What is current workaround?
+  - Backward-compatibility: existing users expect that after upgrading helmify version their existing generated charts wont be changed without consent.
+- For bugfix PR consider adding example to [/test_data](./test_data/) source yamls reproducing bug.
+
+### Contribution flow
+
+Check list before submitting PR:
+1. Run `go fmt ./...`
+2. Run tests `go test ./...`
+3. Update chart examples:
+   ```shell
+   cat test_data/sample-app.yaml | go run ./cmd/helmify examples/app
+   ```
+   ```shell
+   cat test_data/k8s-operator-kustomize.output | go run ./cmd/helmify examples/operator
+   ```
+4. In case of long commit history (more than 3) squash local commits into one

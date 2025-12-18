@@ -7,6 +7,13 @@ metadata:
   {{- include "operator.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.controllerManager.replicas }}
+  strategy:
+    rollingUpdate:
+      maxSurge: {{ .Values.controllerManager.strategy.rollingUpdate.maxSurge | quote
+        }}
+      maxUnavailable: {{ .Values.controllerManager.strategy.rollingUpdate.maxUnavailable
+        | quote }}
+    type: {{ .Values.controllerManager.strategy.type | quote }}
   selector:
     matchLabels:
       control-plane: controller-manager
@@ -87,17 +94,13 @@ spec:
       imagePullSecrets:
       - name: {{ include "operator.fullname" . }}-secret-registry-credentials
       nodeSelector: {{- toYaml .Values.controllerManager.nodeSelector | nindent 8 }}
-      securityContext:
-        runAsNonRoot: true
-      serviceAccountName: {{ include "operator.fullname" . }}-controller-manager
+      securityContext: {{- toYaml .Values.controllerManager.podSecurityContext | nindent
+        8 }}
+      serviceAccountName: {{ include "operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10
-      topologySpreadConstraints:
-      - matchLabelKeys:
-        - app
-        - pod-template-hash
-        maxSkew: 1
-        topologyKey: kubernetes.io/hostname
-        whenUnsatisfiable: DoNotSchedule
+      tolerations: {{- toYaml .Values.controllerManager.tolerations | nindent 8 }}
+      topologySpreadConstraints: {{- toYaml .Values.controllerManager.topologySpreadConstraints
+        | nindent 8 }}
       volumes:
       - configMap:
           name: {{ include "operator.fullname" . }}-manager-config
